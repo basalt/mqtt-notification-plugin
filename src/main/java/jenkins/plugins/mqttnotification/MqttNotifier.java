@@ -5,10 +5,12 @@ import com.cloudbees.plugins.credentials.CredentialsProvider;
 import com.cloudbees.plugins.credentials.common.StandardUsernameListBoxModel;
 import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredentials;
 import com.cloudbees.plugins.credentials.domains.DomainRequirement;
+
 import hudson.Extension;
 import hudson.Launcher;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
+import hudson.model.Run.Artifact;
 import hudson.model.BuildListener;
 import hudson.security.ACL;
 import hudson.tasks.BuildStepDescriptor;
@@ -18,7 +20,9 @@ import hudson.tasks.Publisher;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
 import jenkins.model.Jenkins;
+import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
+
 import org.apache.commons.lang.StringUtils;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
@@ -29,9 +33,14 @@ import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 
 import javax.servlet.ServletException;
+
 import java.io.IOException;
 import java.io.PrintStream;
+import java.net.URI;
+import java.net.URL;
+import java.net.URLDecoder;
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * A simple build result notifier that publishes the result via MQTT.
@@ -45,7 +54,6 @@ public class MqttNotifier extends Notifier {
     private static final String DISPLAY_NAME = "MQTT Notification";
 
     private static final String DEFAULT_TOPIC = "jenkins/$PROJECT_URL";
-    private static final String DEFAULT_MESSAGE = "$BUILD_RESULT";
 
     private final String brokerUrl;
 
@@ -105,8 +113,30 @@ public class MqttNotifier extends Notifier {
         return StringUtils.isEmpty(topic) ? DEFAULT_TOPIC : topic;
     }
 
-    public String getMessage() {
-        return StringUtils.isEmpty(message) ? DEFAULT_MESSAGE : message;
+    public String getMessage(AbstractBuild build) {
+    	if (StringUtils.isEmpty(message)) {
+	    	JSONObject jsonMessage = new JSONObject();
+	    	jsonMessage.put("build_result", build.getResult().toString());
+	    	jsonMessage.put("build_url", build.getUrl());
+	    	jsonMessage.put("build_id", build.getId());
+	    	jsonMessage.put("project_name", build.getProject().getDisplayName());
+	    	jsonMessage.put("project_url", build.getProject().getUrl());
+	    	jsonMessage.put("jenkins_version", build.getHudsonVersion());
+	    	jsonMessage.put("build_summary", build.getBuildStatusSummary());
+	    	jsonMessage.put("build_has_artifacts", build.getHasArtifacts());
+	    	List<Artifact> jobArtifacts = build.getArtifacts();
+	    	JSONArray artifacts = new JSONArray();
+	    	for (Artifact jobArtifact: jobArtifacts) {
+	    		JSONArray fileWithHref = new JSONArray();
+	    		fileWithHref.add(jobArtifact.getFileName());
+	    		fileWithHref.add(jobArtifact.getHref());
+	    		artifacts.add(fileWithHref);
+	    	}
+	    	jsonMessage.put("build_artifacts", artifacts);
+	    	return jsonMessage.toString();
+    	} else {
+    		return message;
+    	}
     }
 
     public int getQos() {
@@ -153,7 +183,7 @@ public class MqttNotifier extends Notifier {
             mqtt.connect(mqttConnectOptions);
             mqtt.publish(
                     replaceVariables(getTopic(), build),
-                    replaceVariables(getMessage(), build).getBytes(),
+                    replaceVariables(getMessage(build), build).getBytes(),
                     getQos(),
                     isRetainMessage()
             );
@@ -237,6 +267,19 @@ public class MqttNotifier extends Notifier {
             result = result.replaceAll("\\$CULPRITS", culprits.toString());
         }
         return result;
+    }
+    
+    
+    public URL convertToURLEscapingIllegalCharacters(String string){
+        try {
+            String decodedURL = URLDecoder.decode(string, "UTF-8");
+            URL url = new URL(decodedURL);
+            URI uri = new URI(url.getProtocol(), url.getUserInfo(), url.getHost(), url.getPort(), url.getPath(), url.getQuery(), url.getRef()); 
+            return uri.toURL(); 
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            return null;
+        }
     }
 
 }
